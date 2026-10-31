@@ -1,4 +1,4 @@
-# Myanmar AI Video Editor — Stage 1
+# HWA — Myanmar AI Video Editor (Stage 1)
 
 Fresh standalone foundation. No dependency on any previous backend.
 
