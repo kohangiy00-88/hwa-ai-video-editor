@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import time
 import urllib.request
 import urllib.error
 
@@ -12,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from google import genai
+
 from app.database import get_connection, init_db
 from app.schemas import ProjectCreate
 
@@ -20,7 +23,10 @@ from app.schemas import ProjectCreate
 # HWA CONFIGURATION
 # ==========================================
 
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/hwa-uploads"))
+UPLOAD_DIR = Path(
+    os.getenv("UPLOAD_DIR", "/tmp/hwa-uploads")
+)
+
 MAX_FILE_SIZE = 500 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {
@@ -30,12 +36,18 @@ ALLOWED_EXTENSIONS = {
     ".m4v"
 }
 
+GEMINI_MODEL = os.getenv(
+    "GEMINI_MODEL",
+    "gemini-2.5-flash"
+)
+
 
 # ==========================================
 # AI RECAP REQUEST MODEL
 # ==========================================
 
 class RecapRequest(BaseModel):
+
     story_text: str = Field(
         min_length=20,
         max_length=30000
@@ -59,8 +71,14 @@ class RecapRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+
     init_db()
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    UPLOAD_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     yield
 
 
@@ -70,8 +88,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="HWA Myanmar AI Video Editor API",
-    version="0.4.0",
-    description="HWA Stage 4 - AI Myanmar Recap System",
+    version="0.5.0",
+    description=(
+        "HWA - Myanmar AI Video Editor "
+        "with Gemini Video Analysis"
+    ),
     lifespan=lifespan,
 )
 
@@ -109,19 +130,22 @@ app.add_middleware(
 
 @app.get("/")
 def root():
+
     return {
         "service": "hwa-video-editor-api",
-        "stage": 4,
+        "stage": 5,
+        "version": "0.5.0",
         "docs": "/docs"
     }
 
 
 @app.get("/api/health")
 def health():
+
     return {
         "ok": True,
         "service": "hwa-video-editor-api",
-        "stage": 4
+        "stage": 5
     }
 
 
@@ -133,22 +157,34 @@ def health():
 def list_projects():
 
     with get_connection() as conn:
+
         rows = conn.execute(
             """
-            SELECT id, name, status, created_at, updated_at
+            SELECT
+                id,
+                name,
+                status,
+                created_at,
+                updated_at
             FROM projects
             ORDER BY id DESC
             """
         ).fetchall()
 
-    return [dict(row) for row in rows]
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # ==========================================
 # CREATE PROJECT
 # ==========================================
 
-@app.post("/api/projects", status_code=201)
+@app.post(
+    "/api/projects",
+    status_code=201
+)
 def create_project(payload: ProjectCreate):
 
     name = payload.name.strip()
@@ -162,7 +198,10 @@ def create_project(payload: ProjectCreate):
     with get_connection() as conn:
 
         cursor = conn.execute(
-            "INSERT INTO projects (name) VALUES (?)",
+            """
+            INSERT INTO projects (name)
+            VALUES (?)
+            """,
             (name,)
         )
 
@@ -170,7 +209,12 @@ def create_project(payload: ProjectCreate):
 
         row = conn.execute(
             """
-            SELECT id, name, status, created_at, updated_at
+            SELECT
+                id,
+                name,
+                status,
+                created_at,
+                updated_at
             FROM projects
             WHERE id = ?
             """,
@@ -181,7 +225,7 @@ def create_project(payload: ProjectCreate):
 
 
 # ==========================================
-# STAGE 3 - VIDEO UPLOAD
+# VIDEO UPLOAD
 # ==========================================
 
 @app.post(
@@ -196,7 +240,11 @@ async def upload_video(
     with get_connection() as conn:
 
         project = conn.execute(
-            "SELECT id FROM projects WHERE id = ?",
+            """
+            SELECT id
+            FROM projects
+            WHERE id = ?
+            """,
             (project_id,)
         ).fetchone()
 
@@ -210,16 +258,22 @@ async def upload_video(
         file.filename or "video"
     ).name
 
-    extension = Path(original_name).suffix.lower()
+    extension = Path(
+        original_name
+    ).suffix.lower()
 
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Only MP4, MOV, WEBM and M4V videos are allowed"
+            detail=(
+                "Only MP4, MOV, WEBM and M4V "
+                "videos are allowed"
+            )
         )
 
     content_type = (
-        file.content_type or "application/octet-stream"
+        file.content_type
+        or "application/octet-stream"
     )
 
     if not (
@@ -228,10 +282,12 @@ async def upload_video(
     ):
         raise HTTPException(
             status_code=400,
-            detail="Uploaded file is not recognized as a video"
+            detail="Uploaded file is not a video"
         )
 
-    stored_name = f"{uuid.uuid4().hex}{extension}"
+    stored_name = (
+        f"{uuid.uuid4().hex}{extension}"
+    )
 
     UPLOAD_DIR.mkdir(
         parents=True,
@@ -260,7 +316,10 @@ async def upload_video(
                 if total_size > MAX_FILE_SIZE:
                     raise HTTPException(
                         status_code=413,
-                        detail="Video must be 500 MB or smaller"
+                        detail=(
+                            "Video must be "
+                            "500 MB or smaller"
+                        )
                     )
 
                 output.write(chunk)
@@ -303,7 +362,9 @@ async def upload_video(
             "filename": original_name,
             "content_type": content_type,
             "size_bytes": total_size,
-            "file_url": f"/api/videos/{video_id}/file"
+            "file_url": (
+                f"/api/videos/{video_id}/file"
+            )
         }
 
     except Exception:
@@ -314,6 +375,7 @@ async def upload_video(
         raise
 
     finally:
+
         await file.close()
 
 
@@ -321,13 +383,19 @@ async def upload_video(
 # LIST PROJECT VIDEOS
 # ==========================================
 
-@app.get("/api/projects/{project_id}/videos")
+@app.get(
+    "/api/projects/{project_id}/videos"
+)
 def list_project_videos(project_id: int):
 
     with get_connection() as conn:
 
         project = conn.execute(
-            "SELECT id FROM projects WHERE id = ?",
+            """
+            SELECT id
+            FROM projects
+            WHERE id = ?
+            """,
             (project_id,)
         ).fetchone()
 
@@ -372,7 +440,9 @@ def list_project_videos(project_id: int):
 # VIDEO PREVIEW
 # ==========================================
 
-@app.get("/api/videos/{video_id}/file")
+@app.get(
+    "/api/videos/{video_id}/file"
+)
 def get_video_file(video_id: int):
 
     with get_connection() as conn:
@@ -414,10 +484,234 @@ def get_video_file(video_id: int):
 
 
 # ==========================================
-# STAGE 4 - AI MYANMAR RECAP
+# GEMINI VIDEO ANALYSIS
 # ==========================================
 
-@app.post("/api/recap/generate")
+@app.post(
+    "/api/videos/{video_id}/analyze"
+)
+def analyze_video(video_id: int):
+
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AI service is not configured. "
+                "Add GEMINI_API_KEY in Render Environment."
+            )
+        )
+
+    with get_connection() as conn:
+
+        row = conn.execute(
+            """
+            SELECT
+                id,
+                project_id,
+                original_filename,
+                stored_filename,
+                content_type,
+                size_bytes
+            FROM video_files
+            WHERE id = ?
+            """,
+            (video_id,)
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Video not found"
+        )
+
+    video_path = (
+        UPLOAD_DIR / row["stored_filename"]
+    )
+
+    if not video_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Video file is not available"
+        )
+
+    client = genai.Client(
+        api_key=api_key
+    )
+
+    uploaded = None
+
+    prompt = """
+You are HWA, a professional Myanmar animation
+story analyst and video recap editor.
+
+Analyze the uploaded video.
+
+IMPORTANT TASKS:
+
+1. Understand the story and its chronology.
+2. Identify important characters and relationships.
+3. Identify important events and scene changes.
+4. Describe important visual details.
+5. Do not invent events or character information.
+6. Preserve the original story meaning.
+7. Write an engaging Myanmar-language YouTube recap.
+8. Divide the recap into clear sections.
+9. Include an interesting opening and ending.
+10. Create a practical video editing plan.
+
+EDITING PLAN REQUIREMENTS:
+
+- Identify important scenes.
+- Provide timestamps when available.
+- Describe each scene.
+- Suggest zoom in and zoom out movements.
+- Suggest left and right camera movement.
+- Suggest smooth transitions.
+- Avoid unnecessary cuts.
+- Preserve important original footage.
+- Suggest suitable subtitle moments.
+- Suggest voiceover timing.
+
+OUTPUT FORMAT:
+
+VIDEO SUMMARY
+
+CHARACTERS
+
+STORY RECAP
+
+IMPORTANT SCENES
+
+EDITING PLAN
+
+VOICEOVER PLAN
+
+SUBTITLE PLAN
+
+Write naturally in Myanmar language.
+Do not claim that an event happened if it is not supported
+by the uploaded video.
+"""
+
+    try:
+
+        uploaded = client.files.upload(
+            file=str(video_path),
+            config={
+                "mime_type": (
+                    row["content_type"]
+                    or "video/mp4"
+                )
+            }
+        )
+
+        started = time.time()
+
+        max_wait_seconds = 1800
+
+        while True:
+
+            state = getattr(
+                uploaded.state,
+                "name",
+                str(uploaded.state)
+            )
+
+            state = state.upper()
+
+            if state.endswith("ACTIVE"):
+                break
+
+            if state.endswith("FAILED"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Gemini could not process "
+                        "the uploaded video."
+                    )
+                )
+
+            if (
+                time.time() - started
+                > max_wait_seconds
+            ):
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "Video preparation timed out. "
+                        "Please retry."
+                    )
+                )
+
+            time.sleep(5)
+
+            uploaded = client.files.get(
+                name=uploaded.name
+            )
+
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                uploaded,
+                prompt
+            ]
+        )
+
+        analysis = (
+            response.text or ""
+        ).strip()
+
+        if not analysis:
+            raise HTTPException(
+                status_code=502,
+                detail="AI returned an empty analysis."
+            )
+
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "project_id": row["project_id"],
+            "filename": row["original_filename"],
+            "language": "my",
+            "status": "completed",
+            "analysis": analysis
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Video analysis failed: "
+                + str(error)[:500]
+            )
+        )
+
+    finally:
+
+        if uploaded is not None:
+
+            try:
+                client.files.delete(
+                    name=uploaded.name
+                )
+            except Exception:
+                pass
+
+
+# ==========================================
+# TEXT-BASED RECAP API
+# Keep for backward compatibility
+# ==========================================
+
+@app.post(
+    "/api/recap/generate"
+)
 def generate_recap(payload: RecapRequest):
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -438,19 +732,20 @@ def generate_recap(payload: RecapRequest):
 အောက်ပါဇာတ်လမ်းအကြောင်းအရာကို အခြေခံပြီး
 YouTube အတွက် မြန်မာလို Recap ဇာတ်ညွှန်းရေးပေးပါ။
 
-အရေးကြီးသော လိုအပ်ချက်များ -
+လိုအပ်ချက်များ -
 
 1. စစချင်းမှာ စိတ်ဝင်စားစရာ Hook ထည့်ပါ။
 2. ဇာတ်လမ်းကို အစဉ်လိုက် ရေးပါ။
-3. ဇာတ်ကောင်များ၏ အမည်နှင့် ဖြစ်ရပ်များကို တိကျစွာ ထိန်းသိမ်းပါ။
-4. မူရင်းအကြောင်းအရာတွင် မပါသော ဖြစ်ရပ်များကို မဖန်တီးပါနှင့်။
-5. နားထောင်ရလွယ်သော သဘာဝကျသည့် မြန်မာစကားသုံးပါ။
-6. အရေးကြီးသော ဇာတ်လမ်းအပိုင်းများကို မချန်ထားပါနှင့်။
-7. ဇာတ်ညွှန်းကို အပိုင်းလိုက် ခေါင်းစဉ်ခွဲပါ။
-8. နောက်ဆုံးတွင် စိတ်ဝင်စားစရာ Ending ထည့်ပါ။
-9. ဇာတ်ညွှန်းသည် YouTube Voiceover ဖတ်ရန် သင့်တော်ရမည်။
+3. ဇာတ်ကောင်အမည်များကို တိကျစွာ ထိန်းသိမ်းပါ။
+4. မူရင်းတွင်မပါသော ဖြစ်ရပ်များ မဖန်တီးပါနှင့်။
+5. သဘာဝကျသော မြန်မာစကားသုံးပါ။
+6. အရေးကြီးသော အကြောင်းအရာများ မချန်ထားပါနှင့်။
+7. အပိုင်းလိုက် ခေါင်းစဉ်ခွဲပါ။
+8. စိတ်ဝင်စားစရာ Ending ထည့်ပါ။
+9. YouTube Voiceover ဖတ်ရန် သင့်တော်ပါစေ။
 
-အသံနေအသံထား: {payload.tone}
+အသံနေအသံထား:
+{payload.tone}
 
 ခန့်မှန်းဗီဒီယိုကြာချိန်:
 {payload.target_minutes} မိနစ်
@@ -461,7 +756,7 @@ YouTube အတွက် မြန်မာလို Recap ဇာတ်ညွှ�
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash:generateContent"
+        f"models/{GEMINI_MODEL}:generateContent"
         f"?key={api_key}"
     )
 
@@ -547,7 +842,10 @@ YouTube အတွက် မြန်မာလို Recap ဇာတ်ညွှ�
 
         raise HTTPException(
             status_code=502,
-            detail="Gemini API error: " + error_message
+            detail=(
+                "Gemini API error: "
+                + error_message
+            )
         )
 
     except urllib.error.URLError:
@@ -587,7 +885,10 @@ def delete_project(project_id: int):
         ).fetchall()
 
         cursor = conn.execute(
-            "DELETE FROM projects WHERE id = ?",
+            """
+            DELETE FROM projects
+            WHERE id = ?
+            """,
             (project_id,)
         )
 
@@ -601,7 +902,9 @@ def delete_project(project_id: int):
 
     for row in rows:
 
-        path = UPLOAD_DIR / row["stored_filename"]
+        path = (
+            UPLOAD_DIR / row["stored_filename"]
+        )
 
         if path.is_file():
             path.unlink()
