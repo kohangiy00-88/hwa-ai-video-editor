@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react'
 
 type Project = {
@@ -9,20 +8,37 @@ type Project = {
   updated_at: string
 }
 
-const API = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')
+type VideoFile = {
+  id: number
+  project_id: number
+  original_filename: string
+  content_type: string
+  size_bytes: number
+  created_at: string
+  file_url: string
+}
+
+const API = (
+  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+).replace(/\/$/, '')
+
+const MAX_SIZE = 500 * 1024 * 1024
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [name, setName] = useState('')
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
+  const [videos, setVideos] = useState<VideoFile[]>([])
   const [health, setHealth] = useState<'checking' | 'online' | 'offline'>('checking')
   const [busy, setBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
   async function checkHealth() {
     try {
       const res = await fetch(`${API}/api/health`)
-      if (!res.ok) throw new Error('API unavailable')
+      if (!res.ok) throw new Error()
       setHealth('online')
     } catch {
       setHealth('offline')
@@ -40,10 +56,27 @@ export default function App() {
     }
   }
 
+  async function loadVideos(projectId: number) {
+    try {
+      const res = await fetch(`${API}/api/projects/${projectId}/videos`)
+      if (!res.ok) throw new Error('Video list could not be loaded')
+      setVideos(await res.json())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Video loading error')
+    }
+  }
+
   useEffect(() => {
     void checkHealth()
     void loadProjects()
   }, [])
+
+  useEffect(() => {
+    if (selectedProject) {
+      setVideos([])
+      void loadVideos(selectedProject.id)
+    }
+  }, [selectedProject?.id])
 
   async function createProject(e: React.FormEvent) {
     e.preventDefault()
@@ -51,6 +84,7 @@ export default function App() {
 
     setBusy(true)
     setError('')
+    setSuccess('')
 
     try {
       const res = await fetch(`${API}/api/projects`, {
@@ -72,15 +106,76 @@ export default function App() {
     }
   }
 
+  async function uploadVideo(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+
+    if (!file || !selectedProject) return
+
+    const extension = file.name.split('.').pop()?.toLowerCase() || ''
+    const allowed = ['mp4', 'mov', 'webm', 'm4v']
+
+    if (!allowed.includes(extension)) {
+      setError('MP4, MOV, WEBM, M4V ဖိုင်များသာ တင်နိုင်ပါတယ်။')
+      return
+    }
+
+    if (file.size > MAX_SIZE) {
+      setError('Video ဖိုင်အရွယ်အစား 500 MB ထက် မကြီးရပါ။')
+      return
+    }
+
+    if (file.size === 0) {
+      setError('ရွေးထားတဲ့ Video ဖိုင်က ဗလာဖြစ်နေပါတယ်။')
+      return
+    }
+
+    setUploading(true)
+    setError('')
+    setSuccess('')
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const res = await fetch(
+        `${API}/api/projects/${selectedProject.id}/videos`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      )
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Video Upload မအောင်မြင်ပါ။')
+      }
+
+      await res.json()
+      setSuccess('Video Upload အောင်မြင်ပါပြီ။')
+      await loadVideos(selectedProject.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload error')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   async function deleteProject(id: number) {
     if (!window.confirm('ဒီ Project ကို ဖျက်မှာ သေချာပါသလား။')) return
 
     try {
-      const res = await fetch(`${API}/api/projects/${id}`, { method: 'DELETE' })
+      const res = await fetch(`${API}/api/projects/${id}`, {
+        method: 'DELETE',
+      })
+
       if (!res.ok) throw new Error('Delete failed')
 
       setProjects(current => current.filter(p => p.id !== id))
-      if (selectedProject?.id === id) setSelectedProject(null)
+      if (selectedProject?.id === id) {
+        setSelectedProject(null)
+        setVideos([])
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete error')
     }
@@ -88,6 +183,11 @@ export default function App() {
 
   const dateText = (date: string) =>
     new Date(date.replace(' ', 'T') + 'Z').toLocaleString()
+
+  const fileSize = (bytes: number) =>
+    bytes >= 1024 * 1024
+      ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+      : `${(bytes / 1024).toFixed(1)} KB`
 
   return (
     <main className="shell">
@@ -99,8 +199,13 @@ export default function App() {
             <small>VIDEO WORKSPACE</small>
           </div>
         </div>
+
         <div className={`status ${health}`}>
-          <i /> API {health === 'checking' ? 'စစ်ဆေးနေသည်' : health === 'online' ? 'ချိတ်ဆက်ပြီး' : 'မချိတ်ဆက်နိုင်ပါ'}
+          <i /> API {health === 'checking'
+            ? 'စစ်ဆေးနေသည်'
+            : health === 'online'
+              ? 'ချိတ်ဆက်ပြီး'
+              : 'မချိတ်ဆက်နိုင်ပါ'}
         </div>
       </header>
 
@@ -108,15 +213,34 @@ export default function App() {
         <>
           <section className="hero">
             <button
-              onClick={() => setSelectedProject(null)}
-              style={{ background: '#1d3150', color: '#c9dcff', border: '1px solid #36517c', borderRadius: 9, padding: '10px 14px', cursor: 'pointer' }}
+              onClick={() => {
+                setSelectedProject(null)
+                setVideos([])
+                setError('')
+                setSuccess('')
+              }}
+              style={{
+                background: '#1d3150',
+                color: '#c9dcff',
+                border: '1px solid #36517c',
+                borderRadius: 9,
+                padding: '10px 14px',
+                cursor: 'pointer',
+              }}
             >
               ← Project များသို့ ပြန်သွားရန်
             </button>
-            <div className="eyebrow" style={{ marginTop: 28 }}>HWA PROJECT WORKSPACE</div>
-            <h1 style={{ overflowWrap: 'anywhere' }}>{selectedProject.name}</h1>
-            <p>ဒီ Project အတွက် ဗီဒီယိုတည်းဖြတ်မှုကို ဒီနေရာကနေ စတင်နိုင်ပါမယ်။</p>
-            <div className="stage-pill">✦ PROJECT CREATED · READY</div>
+
+            <div className="eyebrow" style={{ marginTop: 28 }}>
+              HWA PROJECT WORKSPACE
+            </div>
+
+            <h1 style={{ overflowWrap: 'anywhere' }}>
+              {selectedProject.name}
+            </h1>
+
+            <p>ဒီ Project အတွက် ဗီဒီယိုတည်းဖြတ်မှုကို စတင်ပါ။</p>
+            <div className="stage-pill">✦ VIDEO WORKSPACE READY</div>
           </section>
 
           <section className="panel">
@@ -131,22 +255,121 @@ export default function App() {
             <p style={{ color: '#aab6ca', fontSize: 13 }}>
               Project ID: {selectedProject.id}
             </p>
+
             <p style={{ color: '#aab6ca', fontSize: 13 }}>
               ဖန်တီးခဲ့သည့်အချိန်: {dateText(selectedProject.created_at)}
             </p>
 
-            <div style={{ background: '#0b1424', border: '1px solid #34445e', borderRadius: 14, padding: 20, marginTop: 22 }}>
-              <div style={{ fontSize: 34 }}>🎬</div>
-              <h2 style={{ color: '#eef3ff', fontSize: 19 }}>Video Upload</h2>
-              <p style={{ color: '#91a0b8', fontSize: 13, lineHeight: 1.8 }}>
-                နောက်အဆင့်မှာ မူရင်းဗီဒီယိုကို တင်နိုင်ပြီး Preview ကြည့်နိုင်အောင် ထည့်သွင်းပေးမယ်။
+            {error && <div className="error">{error}</div>}
+            {success && (
+              <p style={{ color: '#63dfa0', fontSize: 14 }}>
+                ✓ {success}
               </p>
-              <button
-                disabled
-                style={{ background: '#34445e', color: '#aab6ca', border: 0, borderRadius: 9, padding: '12px 18px', opacity: 0.8 }}
+            )}
+
+            <div
+              style={{
+                background: '#0b1424',
+                border: '1px solid #34445e',
+                borderRadius: 14,
+                padding: 20,
+                marginTop: 22,
+              }}
+            >
+              <div style={{ fontSize: 34 }}>🎬</div>
+              <h2 style={{ color: '#eef3ff', fontSize: 19 }}>
+                Video Upload
+              </h2>
+
+              <p style={{
+                color: '#91a0b8',
+                fontSize: 13,
+                lineHeight: 1.8,
+              }}>
+                ဖုန်းထဲက မူရင်းဗီဒီယိုကို ရွေးပြီး HWA ထဲသို့ တင်နိုင်ပါပြီ။
+                MP4, MOV, WEBM, M4V · အများဆုံး 500 MB
+              </p>
+
+              <label
+                style={{
+                  display: 'inline-block',
+                  background: uploading ? '#34445e' : '#2865d8',
+                  color: '#fff',
+                  borderRadius: 9,
+                  padding: '13px 20px',
+                  cursor: uploading ? 'wait' : 'pointer',
+                  fontWeight: 700,
+                  opacity: uploading ? 0.7 : 1,
+                }}
               >
-                နောက်အဆင့်တွင် အသုံးပြုနိုင်မည်
-              </button>
+                {uploading ? 'တင်နေသည်... ခဏစောင့်ပါ' : '＋ Video ရွေးပြီး Upload လုပ်ရန်'}
+                <input
+                  type="file"
+                  accept="video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v"
+                  disabled={uploading}
+                  onChange={uploadVideo}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginTop: 28 }}>
+              <div className="section-head">
+                <div>
+                  <small>UPLOADED FILES</small>
+                  <h2>တင်ထားသော ဗီဒီယိုများ</h2>
+                </div>
+                <span className="count">{videos.length} VIDEOS</span>
+              </div>
+
+              {videos.length === 0 ? (
+                <div className="empty">
+                  <div className="empty-icon">🎞️</div>
+                  <b>Video မရှိသေးပါ</b>
+                  <span>အပေါ်က ခလုတ်ကိုနှိပ်ပြီး Video တင်နိုင်ပါတယ်။</span>
+                </div>
+              ) : (
+                videos.map(video => (
+                  <div
+                    key={video.id}
+                    style={{
+                      background: '#0b1424',
+                      border: '1px solid #34445e',
+                      borderRadius: 12,
+                      padding: 14,
+                      marginTop: 14,
+                    }}
+                  >
+                    <b style={{
+                      color: '#eef3ff',
+                      overflowWrap: 'anywhere',
+                    }}>
+                      🎬 {video.original_filename}
+                    </b>
+
+                    <p style={{ color: '#91a0b8', fontSize: 12 }}>
+                      {fileSize(video.size_bytes)} · {dateText(video.created_at)}
+                    </p>
+
+                    <video
+                      controls
+                      playsInline
+                      preload="metadata"
+                      src={`${API}${video.file_url}`}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        maxHeight: 360,
+                        background: '#000',
+                        borderRadius: 10,
+                        marginTop: 12,
+                      }}
+                    >
+                      Your browser does not support video playback.
+                    </video>
+                  </div>
+                ))
+              )}
             </div>
           </section>
 
@@ -155,7 +378,7 @@ export default function App() {
               <span>01</span>
               <b>Video Upload</b>
               <small>Upload · Preview</small>
-              <em>COMING NEXT</em>
+              <em>ACTIVE</em>
             </div>
             <div className="feature">
               <span>02</span>
@@ -182,7 +405,10 @@ export default function App() {
           <section className="hero">
             <div className="eyebrow">YOUR CREATIVE WORKSPACE</div>
             <h1>ဗီဒီယိုတည်းဖြတ်မှုကို<br /><span>စတင်လိုက်ပါ။</span></h1>
-            <p>မြန်မာအသံ AI Recap၊ Subtitle နဲ့ Professional Video Editing အတွက် သီးသန့် Workspace အသစ်။</p>
+            <p>
+              မြန်မာအသံ AI Recap၊ Subtitle နဲ့ Professional Video Editing
+              အတွက် သီးသန့် Workspace အသစ်။
+            </p>
             <div className="stage-pill">✦ HWA · FOUNDATION READY</div>
           </section>
 
@@ -260,7 +486,7 @@ export default function App() {
               <span>01</span>
               <b>Smart Video Engine</b>
               <small>Upload · Scene · Keyframes</small>
-              <em>COMING SOON</em>
+              <em>IN PROGRESS</em>
             </div>
             <div className="feature">
               <span>02</span>
@@ -284,7 +510,9 @@ export default function App() {
         </>
       )}
 
-      <footer>HWA MYANMAR AI VIDEO EDITOR <span>Independent project · v0.2.0</span></footer>
+      <footer>
+        HWA MYANMAR AI VIDEO EDITOR <span>Independent project · v0.3.0</span>
+      </footer>
     </main>
   )
 }
